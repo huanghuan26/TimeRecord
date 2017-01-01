@@ -11,9 +11,10 @@ import java.io.File;
 import static android.os.Environment.DIRECTORY_DOCUMENTS;
 
 /**
- * Created by Air on 2016/12/22.
+ * 数据库类 sqlite3
+ * @author Hugh
+ * @Time 2016/12/12
  */
-
 public class DatabasePro
 {
     public enum Column

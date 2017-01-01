@@ -52,6 +52,8 @@ public class Primary {
     /********************Primary Para 本类自用参数部分**********************/
     private Context m_context;              //application context
     private DatabasePro m_DB;               //数据库
+    private ImagePro m_Img;                //图像处理对象
+    private GPSAndOBD m_GpsAndOBD;
     private TimeRecordAPI m_API;
     private SysInfo_S m_SysInfo;
     private SysStatus_S m_Status;
@@ -70,6 +72,7 @@ public class Primary {
 
     /*student Para*/
     private long m_lClassID;                            //标识学员的一次培训过程， 计时终端 自行使用
+    private String m_sCourseID;                         //培训课程
     private byte[] m_byLearnLevel = new byte[2];
     private long m_lSpecifyTimeTotality;                //场地及道路总需培训学时  单位： min
     private long m_lSpecifyMileTotality = 300;          //场地及道路总需培训里程  单位： km
@@ -193,9 +196,14 @@ public class Primary {
     public Primary(TimeRecordAPI api,Context context) {
         this.m_API = api;
         m_context = context;
+        m_Img = new ImagePro(m_context);
+        m_GpsAndOBD = new GPSAndOBD(this);
         m_SysInfo = m_API.new SysInfo_S();
         m_Status = m_API.new SysStatus_S();
         m_StudentLogin_S = m_API.new StudentLogin_S();
+        m_sDayRecordSN = new String();
+
+
 
 
 
@@ -222,11 +230,17 @@ public class Primary {
 
     public int StartBusiness() {
         System.out.println("Primary.StartBusiness Run");
+        L.setLogPath(m_context.getExternalFilesDir(DIRECTORY_DOCUMENTS).toString());
         LoadConfig(null,null,CONFIGSYS);
         LoadConfig(null,null,CONFIGPRO);
         m_DB = new DatabasePro(m_context);
         m_DB.InitDB();
         ReadyToGetStudyRecordNO();
+        m_GpsAndOBD.start();
+
+
+        /**testing code*/
+        //m_Img.TakePicture();
 
         /**testing code*/
 //        byte[] bySrc = new byte[26];
@@ -283,10 +297,13 @@ public class Primary {
 
 
     public int EndBusiness() {
+
+        m_GpsAndOBD.End();
         m_DB.DBClose();
         System.out.println("Primary EndBusiness");
         return 0;
     }
+
 
 
     /***********************************网络交互部分**********************************************/
@@ -331,7 +348,7 @@ public class Primary {
 
 
     /**网络模块需实现函数,供主模块调用*/
-    /** Net_TerminalRegister 终端注册
+    /** Net_TerminalRegister 终端注册  需回复 Pri_RegisterRes 终端注册应答 0X0100
      * @param nVehicleProvinceID [In] 省ID
      * @param nVehicleCityID [In] 市ID
      * @param byManufacturerID  [In] 制造商ID
@@ -357,7 +374,7 @@ public class Primary {
     {return 0;}
 
 
-    /** Net_CoachLogin 教练员登录
+    /** Net_CoachLogin 教练员登录   需回复 Pri_CoachLoginRes 教练员登录应答
      * @param byCoachID [In] 教练员编号  统一编号
      * @param byCoachIdentity [In] 教练员身份证号ASCII 码，不足 18 位前补 0x00
      * @param byCoachLevel [In] 准教车型A1\A2\A3\B1\B2\C1\C2\C3\C4\D\E\F
@@ -367,14 +384,14 @@ public class Primary {
     {return 0;}
 
 
-    /** Net_CoachLogout 教练员登出
+    /** Net_CoachLogout 教练员登出  需回复Pri_CoachLogout 教练员登出应答  0x8102
      * @param byCoachID [In] 教练员编号  统一编号
      * @param gps [In] PS结构体
      * @return  0：本机正常登出（不代表登出平台成功），-1：登出失败，-2：传入参数有误*/
     public int Net_CoachLogout(byte[] byCoachID, Net_GPS_S gps)
     {return 0;}
 
-    /** Net_StudentLogin 学员登录
+    /** Net_StudentLogin 学员登录    需回复Pri_StudentLoginRes 学员登录应答  0X8201
      * @param byStudentID [In] 学员编号  统一编号
      * @param byStudentsCoach [In] 当前教练编号  统一编号
      * @param sTrainingCourse [In] 培训课程
@@ -384,7 +401,7 @@ public class Primary {
     public int Net_StudentLogin(byte[] byStudentID, byte[] byStudentsCoach, String sTrainingCourse, long lClassID,  Net_GPS_S gps)
     {return 0;}
 
-    /** Net_StudentLogout 学员登出
+    /** Net_StudentLogout 学员登出  需回复Pri_StudentLogoutRes 学员登出应答  0X8020
      * @param byStudentID [In] 学员编号  统一编号
      * @param nStudyContinuousTime [In] 学员该次登录总时间
      * @param nStudyMile [In] 学员该次登录总里程
@@ -411,6 +428,50 @@ public class Primary {
                                String sTrainingCourse, short state, int nMaxSpeed, int nMile, Net_GPS_S gps)
     { return 0;}
 
+    /** Net_TakePictureRes 立即拍照应答
+     * @param result [In]  拍照结果  1：可以拍摄；2：拍照失败；3： SD 卡故障；4：正在拍照，不能执行；5：重新连接摄像头，不能保证拍照；6：正在上传查询照片，不能执行。
+     * @param UploadMode [In]  上传模式  1：自动请求上传   255：停止拍摄并上传图片
+     * @param channel [In] 通道号
+     * @param size [In] 照片尺寸
+     * @return  0：成功，-1 失败，-2 传入参数有误*/
+    public int Net_TakePictureRes(short result, short UploadMode, short channel, short size)
+    { return 0;}
+
+    /** Net_PhotoQueryResult 上报照片查询结果 0X0303  需回复Net_PhotoQueryResultRes 上报照片查询结果应答 0X8303
+     * @param over [In]  是否上报结束  0：否， 1：是
+     * @param Total [In]  符合条件的照片总数
+     * @param currentNum [In] 此次发送的照片数目
+     * @param PhotoNOArray [In] 照片编号数组   byte[10] 的数组,数组个数为currentNum
+     * @return  0：成功，-1 失败，-2 传入参数有误*/
+    public int Net_PhotoQueryResult(short over, short Total, short currentNum, byte[][] PhotoNOArray)
+    { return 0;}
+
+    /** Net_PictureUploadInit 照片上传初始化 0X0305  需回复Pri_PictureUploadInitRes 照片上传初始化应答 0X8305
+     * @param byPhotoID [In]  照片编号
+     * @param byStudentID [In]  学员编号
+     * @param mode [In] 上传模式
+     * @param channel [In] 照片编号 0：自动  1~255 表示通道号
+     * @param size [In] 图片尺寸
+     * @param EventType [In] 发起图片的事件类型
+     * @param lDataSize [In] 照片数据大小
+     * @param lClassID [In] 课堂 ID
+     * @param gps [In] 卫星定位数据包
+     * @param FacePercent [In] 人脸识别置信度
+     * @return  0：成功，-1 失败，-2 传入参数有误*/
+    public int Net_PictureUploadInit(byte[] byPhotoID, byte[] byStudentID, short mode, short channel, short size, short EventType, long lDataSize, long lClassID, Net_GPS_S gps, short FacePercent)
+    { return 0;}
+
+
+    /** Net_SendPictureData 上传照片数据包 0X0306
+     * @param byPhotoID [In]  照片编号
+     * @param byData [In]  照片数据
+     * @param DataLen [In] 照片数据长度 (不含照片编号)
+     * @return  0：成功，-1 失败，-2 传入参数有误*/
+    public int Net_SendPictureData(byte[] byPhotoID, byte[] byData, int DataLen)
+    { return 0;}
+
+
+
 
 
 
@@ -424,7 +485,7 @@ public class Primary {
 
     /**主模块向网络模块提供的接口函数*/
 
-    /** Pri_RegisterRes 设置参数 支持参数值为String 、byte[]和 long类型的重载版本
+    /** Pri_RegisterRes 终端注册应答 0X0100
      * @param Result [In] 应答结果
      * @param byPlatformID [In] 平台编号
      * @param byTrainDepartmentID [In] 培训机构编号
@@ -453,8 +514,7 @@ public class Primary {
         return 0;
     }
 
-
-    /** Pri_SetPara 设置参数 支持参数值为String 、byte[]和 long类型的重载版本
+    /** Pri_SetPara 设置参数 0X8103  支持参数值为String 、byte[]和 long类型的重载版本
      * @param sParaName 参数名称[In]，如设置主服务器APN 则为"m_sMainServerAPN"。注：所有参数都必须是Primary类的成员变量
      * @param sParaValue 参数值[In]，普通数据类型调用toString()转换后填入，byte[] 类型请使用new String("your byte data")
      * @return  0：成功 ,-1:参数名称错误，-2：传入空引用*/
@@ -483,7 +543,7 @@ public class Primary {
         return SetConfig(sParaName, new String(byParaValue),CONFIGPRO);
     }
 
-    /** Pri_SetPara 获取参数
+    /** Pri_SetPara 获取参数  平台获取（指定）参数 0x8104  0x8106 时调用本函数获取参数并自行回复应答
      * @param sParaName 参数名称[In]，如设置主服务器APN 则为"m_sMainServerAPN"。注：所有参数都必须是Primary类的成员变量
      * @param sParaValue 参数值[Out]，注：参数为输出参数
      * @return  0：成功 ,1:参数名称错误，2：传入空引用*/
@@ -497,7 +557,7 @@ public class Primary {
     }
 
 
-    /** Pri_TerminalControl 终端控制
+    /** Pri_TerminalControl 终端控制  0X8105
      * @param command [In] //终端控制命令字说明见表 B.27
      * @param sPara [In] //命令参数格式具体见后描述，每个字段之间采用” ;”分隔
      * @return  0：成功 ,-1:失败*/
@@ -507,17 +567,21 @@ public class Primary {
        return 0;
     }
 
-    /** Pri_GetGPS 发送GPS
+    /** Pri_GetGPS 获取实时GPS，当协议需要GPS数据包时，调用本函数获取
      * @param gps [Out]  GPS结构体
      * @return  0：成功 ,-1:失败，-2：传入空引用*/
     public int Pri_GetGPS(Net_GPS_S gps)
     {
+        if (gps == null)
+        {
+            return -2;
+        }
         GetGPS(gps);
         return 0;
     }
 
 
-    /** Pri_CoachLogin 教练员登录应答
+    /** Pri_CoachLogin 教练员登录应答 0x8101
      * @param LoginResult [In] 登陆结果 1：登录成功;2：无效的教练员编号;3：准教车型不符；9：其他错误
      * @param byCoachID [In]  教练员编号  统一编号
      * @param TTSPlay  [In] 语音播放设置 0：根据全局设置决定是否报读；1：需要报读；2：不必报读
@@ -560,7 +624,7 @@ public class Primary {
     }
 
 
-    /** Pri_CoachLogout 教练员登出应答
+    /** Pri_CoachLogout 教练员登出应答  0x8102
      * @param LoginResult [In] 登陆结果 1：登录成功;2：登出师表
      * @param byCoachID  [In] 教练员编号  统一编号
      * @return  0：成功，-1：出错*/
@@ -587,7 +651,7 @@ public class Primary {
     }
 
 
-    /** Pri_StudentLoginRes 学员登录应答
+    /** Pri_StudentLoginRes 学员登录应答  0X8201
      * @param Stu [In]  学员登录结构体 Net_StudentLogin_S
      * @return  0：成功，-1：出错*/
     public int Pri_StudentLoginRes(Net_StudentLogin_S Stu)
@@ -646,7 +710,7 @@ public class Primary {
     }
 
 
-    /** Pri_StudentLogoutRes 学员登出应答
+    /** Pri_StudentLogoutRes 学员登出应答  0X8020
      * @param result [In]  学员登出
      * @param byStudentID [In] 学员编号
      * @return  0：成功，-1：出错*/
@@ -699,6 +763,65 @@ public class Primary {
         return 0;
     }
 
+
+    /** Pri_ReportStudyRecord 命令上报学时记录  0X8205   注：命令上报学时记录应答0x0205的执行结果为函数的返回值
+     * @param query [In]  上传模式 1：按时间上传；2：按条数上传
+     * @param sStart [In] 查询起始时间  YYMMDDhhmmss
+     * @param sEnd [In] 查询截止时间  YYMMDDhhmmss
+     * @param Num [In] 查询条数
+     * @return  1：查询的记录正在上传；2： SD 卡没有找到；3：执行成功，但无指定记录；4：执行成功，稍候上报查询结果*/
+    public int Pri_ReportStudyRecord (short query, String sStart, String sEnd, int Num)
+    {
+        return 1;
+    }//TODO
+
+
+    /** Pri_TakePicture 立即拍照   0X8301     函数回复 Net_TakePictureRes 立即拍照应答
+     * @param UploadMode [In]  上传模式  1：自动请求上传   255：停止拍摄并上传图片
+     * @param channel [In] 通道号
+     * @param size [In] 照片尺寸
+     * @return  0 成功 -1 失败*/
+    public int Pri_TakePicture (short UploadMode, short channel, short size)
+    {
+        short ret = 1;
+        if(m_Img.TakePicture() != 0)
+        {
+            ret = 2;
+        }
+        Net_TakePictureRes(ret,UploadMode,(short)0,size);
+        return 4;
+    } //TODO  size
+
+
+    /** Pri_PictureQuery  查询照片   0X8302   注： 查询照片应答为函数的返回值
+     * @param type [In]  查询方式 1：按时间查询
+     * @param sStart [In] 查询起始时间  YYMMDDhhmmss
+     * @param sEnd [In] 查询截止时间  YYMMDDhhmmss
+     * @return  1：开始查询2：执行失败 */
+    public int Pri_PictureQuery (short type, String sStart, String sEnd)
+    {
+        return 1;
+    } //TODO
+
+    /** Pri_PhotoQueryResultRes 上报照片查询结果应答 0X8303
+     * @param over [In]  0：默认应答1：停止上报，终端收到“停止上报”应答后则停止查询结果的上报。
+     * @return  0：成功，-1 失败，-2 传入参数有误*/
+    public int Pri_PhotoQueryResultRes(short over)
+    { return 0;}//TODO
+
+    /** Pri_GetTargetPhoto 上传指定照片 0X8304  注：函数返回结果为 0X0304 上传指定照片应答
+     * @param PhotoID [In]  照片编号
+     * @return  0：找到照片，稍候上传 1：没有该照片*/
+    public int Pri_GetTargetPhoto(byte[] PhotoID)
+    { return 0;}//TODO
+
+    /** Pri_PictureUploadInitRes 照片上传初始化应答 0X8305
+     * @param res [In]  应答结果  0：接受上传255：拒绝上传，终端收到“拒绝上传”应答后则停止此照片的上传。
+     * @return  0：成功  -1：失败*/
+    public int Pri_PictureUploadInitRes(short res)
+    {
+        return 0;
+    }//TODO
 
     /** Pri_SetPraticalPara 设置计时终端应用参数   注：根据函数返回值回复0x0501 设置禁训状态应答  返回值为0 回复成功，-1回复设置失败
      * @param ParaNO [In]  参数编号
@@ -1213,6 +1336,21 @@ public class Primary {
 
 
 
+    public int SendStudyRecord(int nMaxSpeed, int nMile, Net_GPS_S gps)
+    {
+        if(!m_bStudentLogin) //学员未登陆
+        {
+            return 0;
+        }
+        byte[] rcNO = new byte[26];
+        GetStudyRecordNO(rcNO);
+        Net_StudyRecord(rcNO,(short)1,m_byStudentID,m_byCoachID,m_lClassID, m_sCourseID, (short)0, nMaxSpeed, nMile, gps);
+        return 0;
+    }
+
+
+
+
 
 
 
@@ -1407,7 +1545,8 @@ public class Primary {
 
         Net_GPS_S gps = new Net_GPS_S();
         GetGPS(gps);
-        Net_StudentLogin(byStudentID, m_byCoachID, sb.toString(), m_lClassID, gps);
+        m_sCourseID = sb.toString();
+        Net_StudentLogin(byStudentID, m_byCoachID, m_sCourseID, m_lClassID, gps);
         return 0;
     }
 
